@@ -1,24 +1,21 @@
 from rest_framework import serializers
-from .models import Document, Contract, LeaveRequest
-
-
-class DocumentSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Document
-        fields = '__all__'
+from .models import Contract, LeaveRequest
 
 
 class ContractSerializer(serializers.ModelSerializer):
-    document_details = DocumentSerializer(source='document', read_only=True)
-
     class Meta:
         model = Contract
         fields = '__all__'
 
 
 class LeaveRequestSerializer(serializers.ModelSerializer):
-    document_details = DocumentSerializer(source='document', read_only=True)
+    days_count = serializers.SerializerMethodField()
 
     class Meta:
         model = LeaveRequest
         fields = '__all__'
+
+    def get_days_count(self, obj):
+        if obj.start_date and obj.end_date:
+            return (obj.end_date - obj.start_date).days + 1
+        return 0

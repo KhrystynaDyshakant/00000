@@ -1,18 +1,16 @@
 from rest_framework import viewsets
-from .models import Document, Contract, LeaveRequest
-from .serializers import DocumentSerializer, ContractSerializer, LeaveRequestSerializer
-
-
-class DocumentViewSet(viewsets.ModelViewSet):
-    queryset = Document.objects.all()
-    serializer_class = DocumentSerializer
+from rest_framework.permissions import AllowAny
+from .models import Contract, LeaveRequest
+from .serializers import ContractSerializer, LeaveRequestSerializer
 
 
 class ContractViewSet(viewsets.ModelViewSet):
     queryset = Contract.objects.all()
     serializer_class = ContractSerializer
+    permission_classes = [AllowAny]
 
 
 class LeaveRequestViewSet(viewsets.ModelViewSet):
     queryset = LeaveRequest.objects.all()
     serializer_class = LeaveRequestSerializer
+    permission_classes = [AllowAny]

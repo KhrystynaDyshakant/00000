@@ -6,44 +6,32 @@ from .models import User, HR
 
 @admin.register(User)
 class UserAdmin(BaseUserAdmin):
-    list_display = ['username', 'email', 'role', 'is_staff', 'is_active']
-    list_filter = ['role', 'is_staff', 'is_active']
-    search_fields = ['username', 'email']
+    list_display = ['username', 'email', 'role', 'is_active', 'is_staff']
+    list_filter = ['role', 'is_active', 'is_staff']
+    search_fields = ['username', 'email', 'first_name', 'last_name']
 
-    fieldsets = (
-        ('Основна інформація', {
-            'fields': ('username', 'email', 'password')
-        }),
-        ('Роль', {
-            'fields': ('role',)
-        }),
-        ('Права доступу', {
-            'fields': ('is_active', 'is_staff', 'is_superuser', 'groups', 'user_permissions')
-        }),
-        ('Важливі дати', {
-            'fields': ('last_login', 'date_joined')
+    fieldsets = BaseUserAdmin.fieldsets + (
+        ('Додаткова інформація', {
+            'fields': ('role', 'phone', 'email_notifications', 'sms_notifications')
         }),
     )
 
-    add_fieldsets = (
-        (None, {
-            'classes': ('wide',),
-            'fields': ('username', 'email', 'password1', 'password2', 'role'),
+    add_fieldsets = BaseUserAdmin.add_fieldsets + (
+        ('Додаткова інформація', {
+            'fields': ('role', 'phone')
         }),
     )
 
 
 @admin.register(HR)
 class HRAdmin(admin.ModelAdmin):
-    list_display = ['id', 'name_display', 'email_display']
-    search_fields = ['name', 'email']
+    list_display = ['id', 'name', 'email', 'user', 'departments_display']
+    list_filter = ['managed_departments']
+    search_fields = ['name', 'email', 'user__username']
 
-    def name_display(self, obj):
-        return obj.name if hasattr(obj, 'name') else f"HR #{obj.id}"
+    def departments_display(self, obj):
+        if obj.managed_departments:
+            return ', '.join(obj.managed_departments)
+        return '-'
 
-    name_display.short_description = 'Ім\'я'
-
-    def email_display(self, obj):
-        return obj.email if hasattr(obj, 'email') else '-'
-
-    email_display.short_description = 'Email'
+    departments_display.short_description = 'Відділи'

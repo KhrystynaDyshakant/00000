@@ -1,14 +1,15 @@
 from django.db import models
-from employees.models import Employee
 
 
 class Notification(models.Model):
-    """Сповіщення (Observer Pattern)"""
+    """
+    Notification - сповіщення
+    """
     NOTIFICATION_TYPES = [
-        ('order_created', 'Створено замовлення'),
-        ('order_status', 'Зміна статусу замовлення'),
+        ('system', 'Системне'),
         ('leave_approved', 'Відпустку схвалено'),
         ('leave_rejected', 'Відпустку відхилено'),
+        ('request_created', 'Заявку створено'),
     ]
 
     CHANNEL_TYPES = [
@@ -18,7 +19,7 @@ class Notification(models.Model):
     ]
 
     recipient = models.ForeignKey(
-        Employee,
+        'employees.Employee',
         on_delete=models.CASCADE,
         verbose_name="Одержувач"
     )
@@ -38,30 +39,34 @@ class Notification(models.Model):
     is_read = models.BooleanField(default=False, verbose_name="Прочитано")
     created_at = models.DateTimeField(auto_now_add=True, verbose_name="Створено")
 
-    def __str__(self):
-        return f"{self.get_notification_type_display()} для {self.recipient}"
-
     class Meta:
         verbose_name = "Сповіщення"
         verbose_name_plural = "Сповіщення"
         ordering = ['-created_at']
 
+    def __str__(self):
+        return f"{self.get_notification_type_display()} для {self.recipient}"
+
 
 class NotificationService:
-    """Сервіс для відправки сповіщень (Observer Pattern - Subject)"""
+    """
+    NotificationService - сервіс сповіщень (Subject в Observer Pattern)
+    """
+    def __init__(self):
+        self._observers = []
 
-    @staticmethod
-    def notify(employee, notification_type, message, channels=['push']):
-        """Створити та надіслати сповіщення"""
-        notifications = []
-        for channel in channels:
-            notification = Notification.objects.create(
-                recipient=employee,
-                notification_type=notification_type,
-                channel=channel,
-                message=message,
-                is_sent=True,
-                is_read=False  # ← ДОДАНО!
-            )
-            notifications.append(notification)
-        return notifications
+    @property
+    def observers(self):
+        return self._observers.copy()
+
+    def attach(self, observer):
+        if observer not in self._observers:
+            self._observers.append(observer)
+
+    def detach(self, observer):
+        if observer in self._observers:
+            self._observers.remove(observer)
+
+    def notify(self, message):
+        for observer in self._observers:
+            observer.update(message)

@@ -1,58 +1,86 @@
 from django.contrib import admin
 from django.utils.html import format_html
-from django.shortcuts import redirect
-from django.contrib import messages
-from .models import Request, RequestState
-from notifications.models import Notification
+from django.contrib.contenttypes.models import ContentType
+from django import forms
+from .models import Request, PendingState, ApprovedState, RejectedState
 
 
-@admin.register(RequestState)
-class RequestStateAdmin(admin.ModelAdmin):
-    list_display = ['id', 'state_type_display']
+# Стани НЕ реєструємо в адмінці - вони використовуються внутрішньо для State pattern
+# і створюються автоматично через скрипт setup_all_data.py
 
-    def state_type_display(self, obj):
-        colors = {
-            'pending': 'orange',
-            'approved': 'green',
-            'rejected': 'red'
-        }
-        return format_html(
-            '<span style="color: {}; font-weight: bold;">{}</span>',
-            colors.get(obj.state_type, 'gray'),
-            obj.get_state_type_display()
-        )
 
-    state_type_display.short_description = 'Статус'
+class RequestAdminForm(forms.ModelForm):
+    STATE_CHOICES = [
+        ('pending', 'Очікує'),
+        ('approved', 'Схвалено'),
+        ('rejected', 'Відхилено'),
+    ]
+    state = forms.ChoiceField(choices=STATE_CHOICES, label='Стан')
+
+    class Meta:
+        model = Request
+        fields = ['employee', 'request_type', 'reason', 'start_date', 'end_date', 'hr_comment']
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if self.instance and self.instance.pk:
+            if self.instance.current_state_type:
+                model = self.instance.current_state_type.model
+                if 'pending' in model:
+                    self.fields['state'].initial = 'pending'
+                elif 'approved' in model:
+                    self.fields['state'].initial = 'approved'
+                elif 'rejected' in model:
+                    self.fields['state'].initial = 'rejected'
+
+    def save(self, commit=True):
+        instance = super().save(commit=False)
+        state_value = self.cleaned_data.get('state')
+
+        if state_value == 'pending':
+            state, _ = PendingState.objects.get_or_create(pk=1)
+            instance.current_state_type = ContentType.objects.get_for_model(PendingState)
+            instance.current_state_id = state.id
+        elif state_value == 'approved':
+            state, _ = ApprovedState.objects.get_or_create(pk=1)
+            instance.current_state_type = ContentType.objects.get_for_model(ApprovedState)
+            instance.current_state_id = state.id
+        elif state_value == 'rejected':
+            state, _ = RejectedState.objects.get_or_create(pk=1)
+            instance.current_state_type = ContentType.objects.get_for_model(RejectedState)
+            instance.current_state_id = state.id
+
+        if commit:
+            instance.save()
+        return instance
 
 
 @admin.register(Request)
 class RequestAdmin(admin.ModelAdmin):
-    list_display = ['id', 'employee_info', 'request_type_display', 'dates_info', 'current_state_display',
-                    'created_date', 'quick_actions']
-    list_filter = ['current_state__state_type', 'request_type', 'created_date', 'employee__department']
+    form = RequestAdminForm
+    list_display = ['id', 'employee_info', 'request_type_display', 'dates_info', 'status_display', 'created_date']
+    list_filter = ['request_type', 'created_date']
     search_fields = ['employee__first_name', 'employee__last_name', 'reason']
     date_hierarchy = 'created_date'
-    readonly_fields = ['created_date']
 
     fieldsets = (
-        ('Основна інформація', {
-            'fields': ('employee', 'request_type', 'reason')
+        ('Співробітник', {
+            'fields': ('employee',)
         }),
-        ('Дати', {
-            'fields': ('start_date', 'end_date')
+        ('Деталі заявки', {
+            'fields': ('request_type', 'reason', 'start_date', 'end_date')
         }),
-        ('Статус', {
-            'fields': ('current_state', 'hr_comment')
+        ('Стан', {
+            'fields': ('state', 'hr_comment')
         }),
     )
 
-    actions = ['approve_selected', 'reject_selected']
+    actions = ['approve_requests', 'reject_requests']
 
     def employee_info(self, obj):
         return format_html(
-            '<strong>{}</strong><br><small>{} - {}</small>',
+            '<strong>{}</strong><br><small>{}</small>',
             f"{obj.employee.first_name} {obj.employee.last_name}",
-            obj.employee.position,
             obj.employee.department
         )
 
@@ -62,8 +90,8 @@ class RequestAdmin(admin.ModelAdmin):
         icons = {
             'vacation': '🏖️',
             'sick': '🏥',
-            'remote': '💻',
-            'other': '📋'
+            'remote': '🏠',
+            'other': '📋',
         }
         return format_html(
             '{} {}',
@@ -75,234 +103,100 @@ class RequestAdmin(admin.ModelAdmin):
 
     def dates_info(self, obj):
         if obj.start_date and obj.end_date:
-            days = obj.days_count()
             return format_html(
-                '{} - {}<br><small>({} днів)</small>',
+                '{} - {}',
                 obj.start_date.strftime('%d.%m.%Y'),
-                obj.end_date.strftime('%d.%m.%Y'),
-                days
+                obj.end_date.strftime('%d.%m.%Y')
             )
         return '-'
 
     dates_info.short_description = 'Період'
 
-    def current_state_display(self, obj):
+    def status_display(self, obj):
         if not obj.current_state:
-            return format_html('<span style="color: gray;">Без статусу</span>')
+            return format_html('<span style="color: gray;">Невизначено</span>')
 
-        colors = {
-            'pending': '#ff9800',
-            'approved': '#4caf50',
-            'rejected': '#f44336'
-        }
-        return format_html(
-            '<span style="background-color: {}; color: white; padding: 5px 12px; border-radius: 4px; font-weight: bold; display: inline-block;">{}</span>',
-            colors.get(obj.current_state.state_type, 'gray'),
-            obj.current_state.get_state_type_display()
-        )
+        pending_ct = ContentType.objects.get_for_model(PendingState)
+        approved_ct = ContentType.objects.get_for_model(ApprovedState)
+        rejected_ct = ContentType.objects.get_for_model(RejectedState)
 
-    current_state_display.short_description = 'Статус'
-
-    def quick_actions(self, obj):
-        if obj.current_state and obj.current_state.state_type == 'pending':
-            approve_url = f'/admin/requests/request/{obj.pk}/approve/'
-            reject_url = f'/admin/requests/request/{obj.pk}/reject/'
-
+        if obj.current_state_type == pending_ct:
             return format_html(
-                '<div style="display: flex; gap: 5px; flex-wrap: nowrap;">'
-                '<a href="{}" style="background: #4caf50; color: white; padding: 8px 15px; border-radius: 4px; text-decoration: none; font-weight: bold; white-space: nowrap;">✓ Схвалити</a>'
-                '<a href="{}" style="background: #f44336; color: white; padding: 8px 15px; border-radius: 4px; text-decoration: none; font-weight: bold; white-space: nowrap;">✗ Відхилити</a>'
-                '</div>',
-                approve_url, reject_url
-            )
-        elif obj.current_state and obj.current_state.state_type == 'approved':
-            return format_html('<span style="color: green; font-weight: bold;">✓ Схвалено</span>')
-        elif obj.current_state and obj.current_state.state_type == 'rejected':
-            return format_html('<span style="color: red; font-weight: bold;">✗ Відхилено</span>')
-        return '-'
+                '<span style="background-color: #ff9800; color: white; padding: 5px 12px; border-radius: 4px;">Очікує</span>')
+        elif obj.current_state_type == approved_ct:
+            return format_html(
+                '<span style="background-color: #4caf50; color: white; padding: 5px 12px; border-radius: 4px;">Схвалено</span>')
+        elif obj.current_state_type == rejected_ct:
+            return format_html(
+                '<span style="background-color: #f44336; color: white; padding: 5px 12px; border-radius: 4px;">Відхилено</span>')
+        return str(obj.current_state)
 
-    quick_actions.short_description = 'Дії'
+    status_display.short_description = 'Статус'
 
-    # Масові дії
-    def approve_selected(self, request, queryset):
-        from documents.models import DocumentFactory  # ← ДОДАТИ ІМПОРТ
-
-        approved_state = RequestState.objects.get(state_type='approved')
-        count = 0
-        docs_created = 0
-
-        for req in queryset.filter(current_state__state_type='pending'):
-            req.current_state = approved_state
-            req.save()
-
+    def approve_requests(self, request, queryset):
+        from notifications.models import Notification
+        for req in queryset:
+            old_state_type = req.current_state_type
+            req.approve()
             # Створити сповіщення
-            notification = Notification.objects.create(
+            Notification.objects.create(
                 recipient=req.employee,
                 notification_type='leave_approved',
                 channel='push',
-                message=f"✅ Вашу заявку #{req.id} ({req.get_request_type_display()}) схвалено!",
-                is_sent=True,
-                is_read=False
+                message=f'Вашу заявку #{req.id} схвалено!',
+                is_sent=True
             )
+        self.message_user(request, f"{queryset.count()} заявок схвалено")
 
-            # ========== FACTORY PATTERN ==========
-            if req.request_type in ['vacation', 'sick'] and req.start_date and req.end_date:
-                try:
-                    leave_document = DocumentFactory.create_document(
-                        document_type='leave_request',
-                        employee=req.employee,
-                        leave_type=req.request_type,
-                        reason=req.reason or f"Заявка #{req.id}",
-                        start_date=req.start_date,
-                        end_date=req.end_date
-                    )
-                    leave_document.document.status = 'approved'
-                    leave_document.document.save()
-                    docs_created += 1
+    approve_requests.short_description = "Схвалити вибрані заявки"
 
-                    print(f"📄 [FACTORY] Документ #{leave_document.id} створено для заявки #{req.id}")
-                except Exception as e:
-                    print(f"⚠️ Помилка Factory для заявки #{req.id}: {e}")
-
-            print(f"\n{'=' * 60}")
-            print(f"✅ [HR APPROVED VIA ACTION] Заявка #{req.id}")
-            print(f"   Співробітник: {req.employee.first_name} {req.employee.last_name}")
-            print(f"   Сповіщення #{notification.id} створено")
-            print(f"{'=' * 60}\n")
-
-            count += 1
-
-        success_msg = f"✅ Схвалено {count} заявок. Співробітники отримали сповіщення."
-        if docs_created > 0:
-            success_msg += f" Створено {docs_created} офіційних документів через Factory Pattern."
-
-        self.message_user(request, success_msg, messages.SUCCESS)
-
-    def reject_selected(self, request, queryset):
-        rejected_state = RequestState.objects.get(state_type='rejected')
-        count = 0
-
-        for req in queryset.filter(current_state__state_type='pending'):
-            req.current_state = rejected_state
-            req.save()
-
-            # Створити сповіщення - ВИПРАВЛЕНО is_read=False
-            notification = Notification.objects.create(
+    def reject_requests(self, request, queryset):
+        from notifications.models import Notification
+        for req in queryset:
+            req.reject()
+            # Створити сповіщення
+            Notification.objects.create(
                 recipient=req.employee,
                 notification_type='leave_rejected',
                 channel='push',
-                message=f"❌ Вашу заявку #{req.id} ({req.get_request_type_display()}) відхилено.",
-                is_sent=True,
-                is_read=False  # ← ВИПРАВЛЕНО!
+                message=f'Вашу заявку #{req.id} відхилено.',
+                is_sent=True
             )
+        self.message_user(request, f"{queryset.count()} заявок відхилено")
 
-            print(f"\n{'=' * 60}")
-            print(f"❌ [HR REJECTED VIA ACTION] Заявка #{req.id}")
-            print(f"   Співробітник: {req.employee.first_name} {req.employee.last_name}")
-            print(f"   Сповіщення #{notification.id} створено")
-            print(f"{'=' * 60}\n")
+    reject_requests.short_description = "Відхилити вибрані заявки"
 
-            count += 1
+    def save_model(self, request, obj, form, change):
+        from notifications.models import Notification
 
-        self.message_user(request, f"❌ Відхилено {count} заявок. Співробітники отримали сповіщення.", messages.WARNING)
-
-    reject_selected.short_description = "✗ Відхилити обрані заявки"
-
-    def get_urls(self):
-        from django.urls import path
-        urls = super().get_urls()
-        custom_urls = [
-            path('<path:object_id>/approve/', self.admin_site.admin_view(self.approve_view),
-                 name='requests_request_approve'),
-            path('<path:object_id>/reject/', self.admin_site.admin_view(self.reject_view),
-                 name='requests_request_reject'),
-        ]
-        return custom_urls + urls
-
-    def approve_view(self, request, object_id):
-        """Схвалити заявку + створити офіційний документ через Factory"""
-        from documents.models import DocumentFactory  # ← ДОДАТИ ІМПОРТ
-
-        req = Request.objects.get(pk=object_id)
-        approved_state = RequestState.objects.get(state_type='approved')
-        req.current_state = approved_state
-        req.save()
-
-        # Створити сповіщення
-        notification = Notification.objects.create(
-            recipient=req.employee,
-            notification_type='leave_approved',
-            channel='push',
-            message=f"✅ Вашу заявку #{req.id} ({req.get_request_type_display()}) схвалено!",
-            is_sent=True,
-            is_read=False
-        )
-
-        # ========== FACTORY PATTERN ==========
-        # Створити офіційний документ через Factory для відпусток та лікарняних
-        leave_document = None
-        if req.request_type in ['vacation', 'sick'] and req.start_date and req.end_date:
+        old_state = None
+        if change and obj.pk:
             try:
-                leave_document = DocumentFactory.create_document(
-                    document_type='leave_request',
-                    employee=req.employee,
-                    leave_type=req.request_type,
-                    reason=req.reason or f"Заявка #{req.id}",
-                    start_date=req.start_date,
-                    end_date=req.end_date
+                old_obj = Request.objects.get(pk=obj.pk)
+                old_state = old_obj.current_state_type
+            except Request.DoesNotExist:
+                pass
+
+        super().save_model(request, obj, form, change)
+
+        # Якщо стан змінився - створити сповіщення
+        if change and old_state and old_state != obj.current_state_type:
+            approved_ct = ContentType.objects.get_for_model(ApprovedState)
+            rejected_ct = ContentType.objects.get_for_model(RejectedState)
+
+            if obj.current_state_type == approved_ct:
+                Notification.objects.create(
+                    recipient=obj.employee,
+                    notification_type='leave_approved',
+                    channel='push',
+                    message=f'Вашу заявку #{obj.id} схвалено!',
+                    is_sent=True
                 )
-                # Одразу схвалюємо документ
-                leave_document.document.status = 'approved'
-                leave_document.document.save()
-
-                print(f"\n{'=' * 60}")
-                print(f"📄 [FACTORY PATTERN USED] Створено офіційний документ")
-                print(f"   Request ID: #{req.id}")
-                print(f"   LeaveRequest ID: #{leave_document.id}")
-                print(f"   Document ID: #{leave_document.document.id}")
-                print(f"{'=' * 60}")
-            except Exception as e:
-                print(f"⚠️ Помилка створення документа через Factory: {e}")
-
-        print(f"\n{'=' * 60}")
-        print(f"✅ [HR APPROVED] Заявка #{req.id}")
-        print(f"   Співробітник: {req.employee.first_name} {req.employee.last_name}")
-        print(f"   Email: {req.employee.email}")
-        print(f"   Сповіщення #{notification.id} створено")
-        print(f"   Повідомлення: {notification.message}")
-        print(f"   is_sent: {notification.is_sent}, is_read: {notification.is_read}")
-        if leave_document:
-            print(f"   Офіційний документ: LeaveRequest #{leave_document.id}")
-        print(f"{'=' * 60}\n")
-
-        success_msg = f"✅ Заявку #{req.id} схвалено! Співробітник отримав сповіщення."
-        if leave_document:
-            success_msg += f" Створено офіційний документ #{leave_document.id}."
-
-        messages.success(request, success_msg)
-        return redirect('admin:requests_request_changelist')
-
-    def reject_view(self, request, object_id):
-        """Відхилити заявку"""
-        req = Request.objects.get(pk=object_id)
-        rejected_state = RequestState.objects.get(state_type='rejected')
-        req.current_state = rejected_state
-        req.save()
-
-        # Створити сповіщення - ВИПРАВЛЕНО is_read=False
-        notification = Notification.objects.create(
-            recipient=req.employee,
-            notification_type='leave_rejected',
-            channel='push',
-            message=f"❌ Вашу заявку #{req.id} ({req.get_request_type_display()}) відхилено.",
-            is_sent=True,
-            is_read=False  # ← ВИПРАВЛЕНО!
-        )
-
-        print(f"\n{'=' * 60}")
-        print(f"❌ [HR REJECTED] Заявка #{req.id}")
-        print(f"   Сповіщення #{notification.id} створено")
-        print(f"{'=' * 60}\n")
-
-        messages.warning(request, f"❌ Заявку #{req.id} відхилено! Співробітник отримав сповіщення.")
-        return redirect('admin:requests_request_changelist')
+            elif obj.current_state_type == rejected_ct:
+                Notification.objects.create(
+                    recipient=obj.employee,
+                    notification_type='leave_rejected',
+                    channel='push',
+                    message=f'Вашу заявку #{obj.id} відхилено.',
+                    is_sent=True
+                )

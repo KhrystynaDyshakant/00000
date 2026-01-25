@@ -24,10 +24,10 @@ class NotificationAdmin(admin.ModelAdmin):
 
     def notification_type_display(self, obj):
         icons = {
-            'order_created': '📝',
-            'order_status': '🔄',
+            'system': '🔔',
             'leave_approved': '✅',
             'leave_rejected': '❌',
+            'request_created': '📝',
         }
         icon = icons.get(obj.notification_type, '📬')
         return format_html(
@@ -40,7 +40,7 @@ class NotificationAdmin(admin.ModelAdmin):
 
     def status_display(self, obj):
         if obj.is_read:
-            return format_html('<span style="color: gray;">👁️ Прочитано</span>')
+            return format_html('<span style="color: gray;">👁 Прочитано</span>')
         elif obj.is_sent:
             return format_html('<span style="color: green;">✓ Надіслано</span>')
         else:

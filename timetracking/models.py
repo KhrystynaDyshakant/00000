@@ -1,102 +1,114 @@
 from django.db import models
-from employees.models import Employee
-from datetime import datetime
 from django.utils import timezone
+from decimal import Decimal
+import threading
 
 
 class TimeRecord(models.Model):
-    """Запис робочого часу"""
+    """
+    TimeRecord - запис робочого часу
+    """
     employee = models.ForeignKey(
-        Employee,
+        'employees.Employee',
         on_delete=models.CASCADE,
         verbose_name="Співробітник"
     )
     clock_in_time = models.DateTimeField(verbose_name="Час входу")
-    clock_out_time = models.DateTimeField(
-        null=True,
-        blank=True,
-        verbose_name="Час виходу"
-    )
+    clock_out_time = models.DateTimeField(null=True, blank=True, verbose_name="Час виходу")
     date = models.DateField(verbose_name="Дата")
-
-    def calculate_hours(self):
-        """Розрахувати відпрацьовані години"""
-        if self.clock_out_time and self.clock_in_time:
-            # Переконатися що обидва datetime мають timezone
-            clock_in = self.clock_in_time
-            clock_out = self.clock_out_time
-
-            # Якщо один має timezone, а інший ні - додати timezone
-            if timezone.is_aware(clock_in) and timezone.is_naive(clock_out):
-                clock_out = timezone.make_aware(clock_out)
-            elif timezone.is_naive(clock_in) and timezone.is_aware(clock_out):
-                clock_in = timezone.make_aware(clock_in)
-
-            delta = clock_out - clock_in
-            return round(delta.total_seconds() / 3600, 2)
-        return 0
-
-    def __str__(self):
-        return f"{self.employee} - {self.date}"
 
     class Meta:
         verbose_name = "Запис робочого часу"
         verbose_name_plural = "Записи робочого часу"
         ordering = ['-date', '-clock_in_time']
 
+    def calculate_hours(self):
+        if self.clock_out_time and self.clock_in_time:
+            delta = self.clock_out_time - self.clock_in_time
+            hours = Decimal(str(delta.total_seconds())) / Decimal('3600')
+            return hours.quantize(Decimal('0.01'))
+        return Decimal('0')
+
+    def __str__(self):
+        return f"{self.employee} - {self.date}"
+
 
 class TimeTrackingSystem:
-    """Singleton для системи обліку часу"""
+    """
+    TimeTrackingSystem - система обліку часу (Singleton Pattern)
+    """
     _instance = None
+    _lock = threading.Lock()
 
     def __new__(cls):
+        raise RuntimeError("Use TimeTrackingSystem.get_instance() instead")
+
+    @classmethod
+    def _create_instance(cls):
+        instance = object.__new__(cls)
+        instance._time_records = []
+        return instance
+
+    @classmethod
+    def get_instance(cls):
         if cls._instance is None:
-            cls._instance = super().__new__(cls)
+            with cls._lock:
+                if cls._instance is None:
+                    cls._instance = cls._create_instance()
         return cls._instance
 
-    @staticmethod
-    def clock_in(employee):
-        """Зареєструвати вхід"""
-        now = timezone.now()  # Використовуємо timezone-aware datetime
+    @classmethod
+    def reset_instance(cls):
+        with cls._lock:
+            cls._instance = None
+
+    def clock_in(self, employee):
+        now = timezone.now()
+        today = now.date()
+
+        existing = TimeRecord.objects.filter(
+            employee=employee,
+            date=today,
+            clock_out_time__isnull=True
+        ).first()
+
+        if existing:
+            return existing
+
         record = TimeRecord.objects.create(
             employee=employee,
             clock_in_time=now,
-            date=now.date()
+            date=today
         )
         return record
 
-    @staticmethod
-    def clock_out(employee):
-        """Зареєструвати вихід"""
+    def clock_out(self, employee):
         today = timezone.now().date()
-        try:
-            record = TimeRecord.objects.filter(
-                employee=employee,
-                date=today,
-                clock_out_time__isnull=True
-            ).latest('clock_in_time')
+        record = TimeRecord.objects.filter(
+            employee=employee,
+            date=today,
+            clock_out_time__isnull=True
+        ).first()
 
-            record.clock_out_time = timezone.now()  # Використовуємо timezone-aware datetime
+        if record:
+            record.clock_out_time = timezone.now()
             record.save()
             return record
-        except TimeRecord.DoesNotExist:
-            return None
+        return None
 
-    @staticmethod
-    def get_hours_worked(employee, date=None):
-        """Отримати відпрацьовані години"""
-        if date is None:
-            date = timezone.now().date()
+    def get_hours_worked(self, employee, target_date=None):
+        if target_date is None:
+            target_date = timezone.now().date()
 
         records = TimeRecord.objects.filter(
             employee=employee,
-            date=date
+            date=target_date
         )
 
-        total_hours = sum([record.calculate_hours() for record in records])
-        return round(total_hours, 2)
+        total = Decimal('0')
+        for record in records:
+            total += record.calculate_hours()
+        return total
 
-    @staticmethod
-    def get_work_history(employee):
-        """Отримати історію роботи"""
-        return TimeRecord.objects.filter(employee=employee)
+    def get_work_history(self, employee):
+        return list(TimeRecord.objects.filter(employee=employee).order_by('-date'))

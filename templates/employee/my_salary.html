@@ -19,17 +19,19 @@
 
                 <h6>Тип розрахунку:</h6>
                 <p>
-                    {% if strategy.strategy_type == 'fixed' %}
+                    {% if strategy_type == 'fixed' %}
                         <span class="badge bg-primary">Фіксована</span>
-                    {% elif strategy.strategy_type == 'bonus' %}
+                    {% elif strategy_type == 'bonus' %}
                         <span class="badge bg-warning text-dark">З бонусами</span>
+                    {% else %}
+                        <span class="badge bg-secondary">Не визначено</span>
                     {% endif %}
                 </p>
 
-                {% if strategy.strategy_type == 'fixed' %}
+                {% if strategy_type == 'fixed' and strategy %}
                     <h6>Щомісячна сума:</h6>
                     <p><strong>{{ strategy.monthly_amount|floatformat:2 }} грн</strong></p>
-                {% elif strategy.strategy_type == 'bonus' %}
+                {% elif strategy_type == 'bonus' and strategy %}
                     <h6>Базова зарплата:</h6>
                     <p><strong>{{ strategy.base_salary|floatformat:2 }} грн</strong></p>
 
@@ -37,9 +39,8 @@
                     <p><strong>{{ strategy.bonus_percentage }}%</strong></p>
 
                     <h6>Сума бонусу:</h6>
-                    {% widthratio strategy.base_salary 100 strategy.bonus_percentage as bonus_calc %}
                     <p class="text-warning">
-                        <strong>{{ bonus_calc|floatformat:2 }} грн</strong>
+                        <strong>{{ salary_history.0.bonus|floatformat:2 }} грн</strong>
                     </p>
 
                     <hr>
@@ -48,7 +49,7 @@
                         <small>
                             <strong>Розрахунок:</strong><br>
                             {{ strategy.base_salary|floatformat:2 }} грн (базова)<br>
-                            + {{ bonus_calc|floatformat:2 }} грн ({{ strategy.bonus_percentage }}% бонус)<br>
+                            + {{ salary_history.0.bonus|floatformat:2 }} грн ({{ strategy.bonus_percentage }}% бонус)<br>
                             = <strong>{{ current_salary|floatformat:2 }} грн</strong>
                         </small>
                     </div>
@@ -70,7 +71,7 @@
                             <tr>
                                 <th>Місяць</th>
                                 <th>Базова</th>
-                                {% if strategy.strategy_type == 'bonus' %}
+                                {% if strategy_type == 'bonus' %}
                                 <th>Бонус</th>
                                 {% endif %}
                                 <th>Всього</th>
@@ -88,7 +89,7 @@
                                     {% endif %}
                                 </td>
                                 <td>{{ item.base_salary|floatformat:2 }} грн</td>
-                                {% if strategy.strategy_type == 'bonus' %}
+                                {% if strategy_type == 'bonus' %}
                                 <td class="text-warning">
                                     <strong>+{{ item.bonus|floatformat:2 }} грн</strong>
                                 </td>
@@ -103,16 +104,21 @@
                                     <span class="badge bg-secondary">{{ item.days_worked }} дн</span>
                                 </td>
                             </tr>
+                            {% empty %}
+                            <tr>
+                                <td colspan="6" class="text-center text-muted">Немає даних</td>
+                            </tr>
                             {% endfor %}
                         </tbody>
                         <tfoot class="table-light">
                             <tr>
-                                <th colspan="{% if strategy.strategy_type == 'bonus' %}3{% else %}2{% endif %}">
+                                <th colspan="{% if strategy_type == 'bonus' %}3{% else %}2{% endif %}">
                                     <strong>Разом за 6 місяців:</strong>
                                 </th>
                                 <th class="text-primary">
+                                    <strong>{{ current_salary|floatformat:2|add:"0"|floatformat:2 }} x 6 = 
                                     {% widthratio current_salary 1 6 as total_6months %}
-                                    <strong>{{ total_6months|floatformat:2 }} грн</strong>
+                                    {{ total_6months|floatformat:2 }} грн</strong>
                                 </th>
                                 <th colspan="2"></th>
                             </tr>
@@ -140,7 +146,7 @@
                     <div class="card-body text-center">
                         <h6><i class="bi bi-clock-history"></i> Цього місяця</h6>
                         <h4 class="text-info mb-0">
-                            {{ salary_history.0.hours_worked }} год
+                            {% if salary_history %}{{ salary_history.0.hours_worked }}{% else %}0{% endif %} год
                         </h4>
                         <small class="text-muted">відпрацьовано</small>
                     </div>
@@ -151,7 +157,7 @@
                     <div class="card-body text-center">
                         <h6><i class="bi bi-calendar-check"></i> Робочих днів</h6>
                         <h4 class="text-success mb-0">
-                            {{ salary_history.0.days_worked }}
+                            {% if salary_history %}{{ salary_history.0.days_worked }}{% else %}0{% endif %}
                         </h4>
                         <small class="text-muted">цього місяця</small>
                     </div>
@@ -169,7 +175,7 @@
                 <h5 class="mb-0"><i class="bi bi-info-circle"></i> Як розраховується моя зарплата?</h5>
             </div>
             <div class="card-body">
-                {% if strategy.strategy_type == 'fixed' %}
+                {% if strategy_type == 'fixed' %}
                     <p class="mb-2">
                         <i class="bi bi-check-circle text-success"></i>
                         У вас <strong>фіксована зарплата</strong> - {{ strategy.monthly_amount|floatformat:2 }} грн щомісяця
@@ -182,7 +188,7 @@
                         <i class="bi bi-calendar-event text-info"></i>
                         Виплата здійснюється щомісяця в один і той самий день
                     </p>
-                {% elif strategy.strategy_type == 'bonus' %}
+                {% elif strategy_type == 'bonus' %}
                     <p class="mb-2">
                         <i class="bi bi-piggy-bank text-warning"></i>
                         У вас зарплата <strong>з бонусною системою</strong>
@@ -193,8 +199,7 @@
                                 <h6 class="text-primary">📊 Формула розрахунку:</h6>
                                 <p class="mb-1"><strong>Базова зарплата:</strong> {{ strategy.base_salary|floatformat:2 }} грн</p>
                                 <p class="mb-1"><strong>Бонус ({{ strategy.bonus_percentage }}%):</strong>
-                                    {% widthratio strategy.base_salary 100 strategy.bonus_percentage as bonus_amount %}
-                                    {{ bonus_amount|floatformat:2 }} грн
+                                    {{ salary_history.0.bonus|floatformat:2 }} грн
                                 </p>
                                 <hr class="my-2">
                                 <p class="mb-0"><strong>Разом:</strong> <span class="text-success">{{ current_salary|floatformat:2 }} грн</span></p>
@@ -210,6 +215,11 @@
                                 </ul>
                             </div>
                         </div>
+                    </div>
+                {% else %}
+                    <div class="alert alert-warning">
+                        <i class="bi bi-exclamation-triangle"></i>
+                        Стратегія розрахунку зарплати не призначена. Зверніться до HR.
                     </div>
                 {% endif %}
             </div>
